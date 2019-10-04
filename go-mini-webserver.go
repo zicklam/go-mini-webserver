@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"net/http"
 	"log"
-	
+	"runtime"
 	"time"
 	"fmt"
 )
@@ -17,21 +17,43 @@ type key int
 
 const (
 	requestIDKey key = 0
+	VERSION float64 = 0.2
 )
 
 var (
     httpListener = flag.String("listen", ":8080", "Worauf soll ich hören?")
-    htmlDocument = flag.String("document", "index.html", "Wat soll ich zeigen?")
-	htmlFallback = []byte("<html><head><title>blubb</title></head><body><h1>Hier gibts leider nichts!</body></html>")
+	htmlDocument = flag.String("document", "./index.html", "Wat soll ich zeigen?")
+
+	access_logger *log.Logger
+	//accessLogfile = flag.String("access_log", "./access_log", "Pfad zur access_log")
+	accessLogfile = "./access_log"
+	htmlFallback = []byte("<html><head><title>blubb</title><link rel=\"icon\" href=\"/favicon.ico\" type=\"image/x-icon\"></head><body><h1>Hier gibts leider nichts!</body></html>")
 	
 	healthy    int32
 )
 
+func init() {
+    access_log, err := os.OpenFile(accessLogfile,  os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+    if err != nil {
+        fmt.Printf("error opening file: %v", err)
+        os.Exit(1)
+    }
+    access_logger = log.New(access_log, "", log.LstdFlags)
+}
+
 func main() {
+	
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Was guckst du denn hier rum?\nFrag Antonius, der weiß, wie das geht\n\n\tVersion v%0.1f %s \n\n", VERSION, "(https://github.com/zicklam/go-mini-webserver)")
+		//fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
+		flag.PrintDefaults()
+	}
+
 	flag.Parse()
 
 	logger := log.New(os.Stdout, "[Antonius-Webserver] ", log.LstdFlags)
-	logger.Println("Server is starting...")
+	logger.Printf("Server v%0.1f pid=%d started with processes: %d", VERSION, os.Getpid(), runtime.GOMAXPROCS(runtime.NumCPU()))
+	logger.Println("Server is serving an HTML File:", *htmlDocument)
 
 	/* kann nicht loggen, also ServeMux benutzen
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -45,8 +67,10 @@ func main() {
 	// https://golang.org/pkg/net/http/#ServeMux
 
 	toniWeb := http.NewServeMux()
-	toniWeb.Handle("/", rootIndex())
-	toniWeb.Handle("/about", toni())
+	toniWeb.Handle("/", rootIndex(logger))
+	toniWeb.Handle("/favicon.ico", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { 
+		http.ServeFile(w, r, "img/favicon-96x96.bmp.ico") 
+	}))
 
 	nextRequestID := func() string {
 		return fmt.Sprintf("%d", time.Now().UnixNano())
@@ -54,7 +78,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:         *httpListener,
-		Handler:      tracing(nextRequestID)(logging(logger)(toniWeb)),
+		Handler:      tracing(nextRequestID)(logging(access_logger)(toniWeb)),
 		ErrorLog:     logger,
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 10 * time.Second,
@@ -90,7 +114,7 @@ func main() {
 	logger.Println("Server stopped")
 }
 
-func rootIndex() http.Handler {
+func rootIndex(logger *log.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
@@ -98,25 +122,15 @@ func rootIndex() http.Handler {
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.WriteHeader(http.StatusOK)
+		//w.WriteHeader(http.StatusOK)
 
 		if _, err := os.Stat(*htmlDocument); err == nil {
 			http.ServeFile(w, r, *htmlDocument)
 		} else if os.IsNotExist(err) {
-			//logger.Println("File not found, use fallback html code")
+			logger.Println("File", *htmlDocument, "not found, use fallback html code")
 			w.Write(htmlFallback)
 		}
 		
-	})
-}
-
-func toni() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if atomic.LoadInt32(&healthy) == 1 {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		w.WriteHeader(http.StatusServiceUnavailable)
 	})
 }
 
@@ -124,11 +138,14 @@ func logging(logger *log.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			defer func() {
+				/*
 				requestID, ok := r.Context().Value(requestIDKey).(string)
 				if !ok {
 					requestID = "unknown"
 				}
-				logger.Println(requestID, r.Method, r.URL.Path, r.RemoteAddr, r.UserAgent())
+				*/
+				//logger.Println(requestID, r.Method, r.URL.Path, r.RemoteAddr, r.UserAgent())
+				logger.Println(r.RemoteAddr, r.Method, r.URL.Path, r.UserAgent())
 			}()
 			next.ServeHTTP(w, r)
 		})
