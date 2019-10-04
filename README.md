@@ -2,6 +2,10 @@
 
 Run a simple HTTP server to serve 1 html page with access_log.
 
+## Download
+
+`go get github.com/zicklam/go-mini-webserver`
+
 ## Usage
 ```
 Usage of ./go-mini-webserver:
